@@ -20,6 +20,7 @@
 package whois
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
@@ -107,8 +108,7 @@ func (c *Client) SetDisableReferral(disabled bool) *Client {
 	return c
 }
 
-// Whois do the whois query and returns whois information
-func (c *Client) Whois(domain string, servers ...string) (result string, err error) {
+func (c *Client) WhoisCtx(ctx context.Context, domain string, servers ...string) (result string, err error) {
 	start := time.Now()
 	defer func() {
 		result = strings.TrimSpace(result)
@@ -132,7 +132,7 @@ func (c *Client) Whois(domain string, servers ...string) (result string, err err
 	}
 
 	if !strings.Contains(domain, ".") && !strings.Contains(domain, ":") && !isASN {
-		return c.rawQuery(domain, defaultWhoisServer, defaultWhoisPort)
+		return c.rawQuery(ctx, domain, defaultWhoisServer, defaultWhoisPort)
 	}
 
 	var server, port string
@@ -141,7 +141,7 @@ func (c *Client) Whois(domain string, servers ...string) (result string, err err
 		port = defaultWhoisPort
 	} else {
 		ext := getExtension(domain)
-		result, err := c.rawQuery(ext, defaultWhoisServer, defaultWhoisPort)
+		result, err := c.rawQuery(ctx, ext, defaultWhoisServer, defaultWhoisPort)
 		if err != nil {
 			return "", fmt.Errorf("whois: query for whois server failed: %w", err)
 		}
@@ -151,7 +151,7 @@ func (c *Client) Whois(domain string, servers ...string) (result string, err err
 		}
 	}
 
-	result, err = c.rawQuery(domain, server, port)
+	result, err = c.rawQuery(ctx, domain, server, port)
 	if err != nil {
 		return
 	}
@@ -165,7 +165,7 @@ func (c *Client) Whois(domain string, servers ...string) (result string, err err
 		return
 	}
 
-	data, err := c.rawQuery(domain, refServer, refPort)
+	data, err := c.rawQuery(ctx, domain, refServer, refPort)
 	if err == nil {
 		result += data
 	}
@@ -173,8 +173,13 @@ func (c *Client) Whois(domain string, servers ...string) (result string, err err
 	return
 }
 
+// Whois do the whois query and returns whois information
+func (c *Client) Whois(domain string, servers ...string) (result string, err error) {
+	return c.WhoisCtx(context.Background(), domain, servers...)
+}
+
 // rawQuery do raw query to the server
-func (c *Client) rawQuery(domain, server, port string) (string, error) {
+func (c *Client) rawQuery(ctx context.Context, domain, server, port string) (string, error) {
 	c.elapsed = 0
 	start := time.Now()
 
@@ -196,7 +201,17 @@ func (c *Client) rawQuery(domain, server, port string) (string, error) {
 		server = "whois.porkbun.com"
 	}
 
-	conn, err := c.dialer.Dial("tcp", net.JoinHostPort(server, port))
+	var (
+		conn net.Conn
+		err  error
+	)
+
+	if dialer, ok := c.dialer.(proxy.ContextDialer); ok {
+		conn, err = dialer.DialContext(ctx, "tcp", net.JoinHostPort(server, port))
+	} else {
+		conn, err = c.dialer.Dial("tcp", net.JoinHostPort(server, port))
+	}
+
 	if err != nil {
 		return "", fmt.Errorf("whois: connect to whois server failed: %w", err)
 	}
